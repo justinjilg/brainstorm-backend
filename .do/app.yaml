@@ -1,0 +1,50 @@
+name: brainstorm-backend
+region: nyc
+services:
+  - name: api
+    github:
+      repo: justinjilg/brainstorm-backend
+      branch: main
+      deploy_on_push: true
+    source_dir: /
+    environment_slug: node-js
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    http_port: 3000
+    routes:
+      - path: /
+    envs:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: APP_URL
+        value: https://app.brainstorm.co
+      - key: JWT_SECRET
+        value: ${JWT_SECRET}
+        type: SECRET
+      - key: SMTP_HOST
+        value: ${SMTP_HOST}
+        type: SECRET
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        value: ${SMTP_USER}
+        type: SECRET
+      - key: SMTP_PASS
+        value: ${SMTP_PASS}
+        type: SECRET
+      - key: SMTP_FROM
+        value: noreply@brainstorm.co
+      - key: GOOGLE_CLIENT_ID
+        value: ${GOOGLE_CLIENT_ID}
+        type: SECRET
+      - key: GOOGLE_CLIENT_SECRET
+        value: ${GOOGLE_CLIENT_SECRET}
+        type: SECRET
+      - key: GITHUB_CLIENT_ID
+        value: ${GITHUB_CLIENT_ID}
+        type: SECRET
+      - key: GITHUB_CLIENT_SECRET
+        value: ${GITHUB_CLIENT_SECRET}
+        type: SECRET

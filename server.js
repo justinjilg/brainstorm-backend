@@ -1,0 +1,285 @@
+const express = require('express');
+const cors = require('cors');
+const nodemailer = require('nodemailer');
+const jwt = require('jsonwebtoken');
+const axios = require('axios');
+require('dotenv').config();
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Environment variables
+const APP_URL = process.env.APP_URL || 'https://app.brainstorm.co';
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+const SMTP_HOST = process.env.SMTP_HOST;
+const SMTP_PORT = process.env.SMTP_PORT || 587;
+const SMTP_USER = process.env.SMTP_USER;
+const SMTP_PASS = process.env.SMTP_PASS;
+const SMTP_FROM = process.env.SMTP_FROM || 'noreply@brainstorm.co';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
+const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
+
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        service: 'brainstorm-backend',
+        version: '1.0.0',
+        timestamp: new Date().toISOString()
+    });
+});
+
+// Magic link authentication endpoint
+app.post('/api/v1/auth/magic-link', async (req, res) => {
+    try {
+        const { email, site_url, redirect_url } = req.body;
+
+        if (!email) {
+            return res.status(400).json({
+                success: false,
+                message: 'Email address required'
+            });
+        }
+
+        // Generate JWT token for magic link
+        const token = jwt.sign(
+            { email, site_url, timestamp: Date.now() },
+            JWT_SECRET,
+            { expiresIn: '15m' }
+        );
+
+        // Construct magic link URL
+        const magicLink = `${redirect_url}${redirect_url.includes('?') ? '&' : '?'}token=${token}`;
+
+        // Send email
+        if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
+            const transporter = nodemailer.createTransport({
+                host: SMTP_HOST,
+                port: SMTP_PORT,
+                secure: SMTP_PORT == 465,
+                auth: {
+                    user: SMTP_USER,
+                    pass: SMTP_PASS
+                }
+            });
+
+            await transporter.sendMail({
+                from: SMTP_FROM,
+                to: email,
+                subject: 'Your Brainstorm Magic Link',
+                html: `
+                    <h2>Welcome back to Brainstorm!</h2>
+                    <p>Click the link below to log in (expires in 15 minutes):</p>
+                    <p><a href="${magicLink}" style="display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-decoration: none; border-radius: 8px;">Log in to Brainstorm</a></p>
+                    <p>Or copy and paste this URL into your browser:</p>
+                    <p>${magicLink}</p>
+                    <p>If you didn't request this, you can safely ignore this email.</p>
+                `
+            });
+
+            console.log(`Magic link sent to ${email}`);
+        } else {
+            // For testing without SMTP configured
+            console.log(`Magic link (SMTP not configured): ${magicLink}`);
+        }
+
+        res.json({
+            success: true,
+            message: `Magic link sent to ${email}`,
+            ...(process.env.NODE_ENV === 'development' && { debug_link: magicLink })
+        });
+
+    } catch (error) {
+        console.error('Magic link error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to send magic link'
+        });
+    }
+});
+
+// Google OAuth URL endpoint
+app.get('/api/v1/auth/google/url', (req, res) => {
+    try {
+        const { site_url, redirect_url } = req.query;
+
+        if (!GOOGLE_CLIENT_ID) {
+            return res.status(500).json({
+                success: false,
+                message: 'Google OAuth not configured'
+            });
+        }
+
+        // Generate state parameter for CSRF protection
+        const state = jwt.sign(
+            { site_url, redirect_url, timestamp: Date.now() },
+            JWT_SECRET,
+            { expiresIn: '15m' }
+        );
+
+        // Construct Google OAuth URL
+        const googleOAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+            `client_id=${encodeURIComponent(GOOGLE_CLIENT_ID)}` +
+            `&redirect_uri=${encodeURIComponent(`${APP_URL}/auth/google/callback`)}` +
+            `&response_type=code` +
+            `&scope=${encodeURIComponent('openid email profile')}` +
+            `&state=${encodeURIComponent(state)}`;
+
+        res.json({
+            success: true,
+            oauth_url: googleOAuthUrl
+        });
+
+    } catch (error) {
+        console.error('Google OAuth URL error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to generate Google OAuth URL'
+        });
+    }
+});
+
+// GitHub OAuth URL endpoint
+app.get('/api/v1/auth/github/url', (req, res) => {
+    try {
+        const { site_url, redirect_url } = req.query;
+
+        if (!GITHUB_CLIENT_ID) {
+            return res.status(500).json({
+                success: false,
+                message: 'GitHub OAuth not configured'
+            });
+        }
+
+        // Generate state parameter for CSRF protection
+        const state = jwt.sign(
+            { site_url, redirect_url, timestamp: Date.now() },
+            JWT_SECRET,
+            { expiresIn: '15m' }
+        );
+
+        // Construct GitHub OAuth URL
+        const githubOAuthUrl = `https://github.com/login/oauth/authorize?` +
+            `client_id=${encodeURIComponent(GITHUB_CLIENT_ID)}` +
+            `&redirect_uri=${encodeURIComponent(`${APP_URL}/auth/github/callback`)}` +
+            `&scope=${encodeURIComponent('user:email')}` +
+            `&state=${encodeURIComponent(state)}`;
+
+        res.json({
+            success: true,
+            oauth_url: githubOAuthUrl
+        });
+
+    } catch (error) {
+        console.error('GitHub OAuth URL error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to generate GitHub OAuth URL'
+        });
+    }
+});
+
+// Google OAuth callback
+app.get('/auth/google/callback', async (req, res) => {
+    try {
+        const { code, state } = req.query;
+
+        // Verify state parameter
+        const decoded = jwt.verify(state, JWT_SECRET);
+        const { site_url, redirect_url } = decoded;
+
+        // Exchange code for token
+        const tokenResponse = await axios.post('https://oauth2.googleapis.com/token', {
+            code,
+            client_id: GOOGLE_CLIENT_ID,
+            client_secret: GOOGLE_CLIENT_SECRET,
+            redirect_uri: `${APP_URL}/auth/google/callback`,
+            grant_type: 'authorization_code'
+        });
+
+        const { access_token } = tokenResponse.data;
+
+        // Get user info
+        const userResponse = await axios.get('https://www.googleapis.com/oauth2/v2/userinfo', {
+            headers: { Authorization: `Bearer ${access_token}` }
+        });
+
+        const { email, name } = userResponse.data;
+
+        // Generate session token
+        const sessionToken = jwt.sign(
+            { email, name, provider: 'google', timestamp: Date.now() },
+            JWT_SECRET,
+            { expiresIn: '7d' }
+        );
+
+        // Redirect back to WordPress with token
+        const finalRedirect = `${redirect_url}${redirect_url.includes('?') ? '&' : '?'}token=${sessionToken}`;
+        res.redirect(finalRedirect);
+
+    } catch (error) {
+        console.error('Google OAuth callback error:', error);
+        res.status(500).send('Authentication failed');
+    }
+});
+
+// GitHub OAuth callback
+app.get('/auth/github/callback', async (req, res) => {
+    try {
+        const { code, state } = req.query;
+
+        // Verify state parameter
+        const decoded = jwt.verify(state, JWT_SECRET);
+        const { site_url, redirect_url } = decoded;
+
+        // Exchange code for token
+        const tokenResponse = await axios.post('https://github.com/login/oauth/access_token', {
+            client_id: GITHUB_CLIENT_ID,
+            client_secret: GITHUB_CLIENT_SECRET,
+            code,
+            redirect_uri: `${APP_URL}/auth/github/callback`
+        }, {
+            headers: { Accept: 'application/json' }
+        });
+
+        const { access_token } = tokenResponse.data;
+
+        // Get user info
+        const userResponse = await axios.get('https://api.github.com/user', {
+            headers: {
+                Authorization: `Bearer ${access_token}`,
+                Accept: 'application/vnd.github.v3+json'
+            }
+        });
+
+        const { email, name, login } = userResponse.data;
+
+        // Generate session token
+        const sessionToken = jwt.sign(
+            { email: email || `${login}@github`, name: name || login, provider: 'github', timestamp: Date.now() },
+            JWT_SECRET,
+            { expiresIn: '7d' }
+        );
+
+        // Redirect back to WordPress with token
+        const finalRedirect = `${redirect_url}${redirect_url.includes('?') ? '&' : '?'}token=${sessionToken}`;
+        res.redirect(finalRedirect);
+
+    } catch (error) {
+        console.error('GitHub OAuth callback error:', error);
+        res.status(500).send('Authentication failed');
+    }
+});
+
+// Start server
+app.listen(PORT, () => {
+    console.log(`Brainstorm Backend API running on port ${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`Health check: http://localhost:${PORT}/api/health`);
+});
