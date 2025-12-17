@@ -35,6 +35,65 @@ app.get('/api/health', (req, res) => {
     });
 });
 
+// Site registration endpoint
+app.post('/api/v1/sites/register', async (req, res) => {
+    try {
+        const {
+            site_url,
+            site_name,
+            admin_email,
+            wordpress_version,
+            php_version,
+            plugin_version,
+            api_key,
+            theme,
+            is_multisite,
+            environment,
+            registration_timestamp,
+            server_ip
+        } = req.body;
+
+        if (!site_url || !admin_email) {
+            return res.status(400).json({
+                success: false,
+                message: 'Site URL and admin email required'
+            });
+        }
+
+        // Generate a unique registration ID
+        const registration_id = `site_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+        // Generate an access token for the site
+        const access_token = jwt.sign(
+            {
+                registration_id,
+                site_url,
+                admin_email,
+                timestamp: Date.now()
+            },
+            JWT_SECRET,
+            { expiresIn: '365d' } // 1 year
+        );
+
+        console.log(`Site registered: ${site_name} (${site_url})`);
+
+        res.status(201).json({
+            success: true,
+            registration_id,
+            access_token,
+            message: 'Site registered successfully',
+            registered_at: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error('Site registration error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to register site'
+        });
+    }
+});
+
 // Magic link authentication endpoint
 app.post('/api/v1/auth/magic-link', async (req, res) => {
     try {
