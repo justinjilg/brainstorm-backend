@@ -35,6 +35,31 @@ app.get('/api/health', (req, res) => {
     });
 });
 
+// MCP installer script endpoint
+app.get('/install.sh', (req, res) => {
+    const { site_url, api_key, site_name } = req.query;
+
+    if (!site_url || !api_key) {
+        return res.status(400).send('# Error: Missing site_url or api_key parameters\n# Usage: curl "https://brainstorm-backend-gk4th.ondigitalocean.app/install.sh?site_url=...&api_key=...&site_name=..." | bash');
+    }
+
+    const fs = require('fs');
+    const path = require('path');
+
+    // Read the installer script
+    const scriptPath = path.join(__dirname, 'mcp-installer.sh');
+    let script = fs.readFileSync(scriptPath, 'utf8');
+
+    // Inject the parameters
+    script = script.replace('SITE_URL="${SITE_URL:-}"', `SITE_URL="${site_url}"`);
+    script = script.replace('API_KEY="${API_KEY:-}"', `API_KEY="${api_key}"`);
+    script = script.replace('SITE_NAME="${SITE_NAME:-My WordPress Site}"', `SITE_NAME="${site_name || 'My WordPress Site'}"`);
+
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', 'attachment; filename="install-brainstorm-mcp.sh"');
+    res.send(script);
+});
+
 // Site registration endpoint
 app.post('/api/v1/sites/register', async (req, res) => {
     try {
