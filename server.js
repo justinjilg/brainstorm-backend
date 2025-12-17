@@ -3,10 +3,17 @@ const cors = require('cors');
 const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
+const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Initialize Supabase client
+const supabase = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 // Middleware
 app.use(cors());
@@ -85,6 +92,27 @@ app.post('/api/v1/sites/register', async (req, res) => {
             });
         }
 
+        // Get user_id from access token if provided
+        const authHeader = req.headers.authorization;
+        let user_id = null;
+
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            try {
+                const token = authHeader.substring(7);
+                const decoded = jwt.verify(token, JWT_SECRET);
+                user_id = decoded.user_id;
+            } catch (err) {
+                console.log('Could not decode token, creating site without user association');
+            }
+        }
+
+        // If no user_id from token, try to find user by email
+        if (!user_id) {
+            const { data: users } = await supabase.auth.admin.listUsers();
+            const existingUser = users?.users?.find(u => u.email === admin_email);
+            user_id = existingUser?.id;
+        }
+
         // Generate a unique registration ID
         const registration_id = `site_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -94,13 +122,42 @@ app.post('/api/v1/sites/register', async (req, res) => {
                 registration_id,
                 site_url,
                 admin_email,
+                user_id,
                 timestamp: Date.now()
             },
             JWT_SECRET,
             { expiresIn: '365d' } // 1 year
         );
 
-        console.log(`Site registered: ${site_name} (${site_url})`);
+        // Save to Supabase
+        const { data: site, error: dbError } = await supabase
+            .from('sites')
+            .insert({
+                user_id,
+                registration_id,
+                site_url,
+                site_name,
+                admin_email,
+                wordpress_version,
+                php_version,
+                plugin_version,
+                api_key,
+                theme,
+                is_multisite: is_multisite || false,
+                environment: environment || 'production',
+                server_ip,
+                access_token,
+                status: 'active'
+            })
+            .select()
+            .single();
+
+        if (dbError) {
+            console.error('Database error:', dbError);
+            // Continue even if database fails - return success to WordPress
+        }
+
+        console.log(`Site registered: ${site_name} (${site_url})${user_id ? ` for user ${user_id}` : ''}`);
 
         res.status(201).json({
             success: true,
@@ -115,6 +172,60 @@ app.post('/api/v1/sites/register', async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to register site'
+        });
+    }
+});
+
+// Get user's sites endpoint
+app.get('/api/v1/sites', async (req, res) => {
+    try {
+        // Get user_id from access token
+        const authHeader = req.headers.authorization;
+
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({
+                success: false,
+                message: 'Authorization token required'
+            });
+        }
+
+        const token = authHeader.substring(7);
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const user_id = decoded.user_id;
+
+        if (!user_id) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid token'
+            });
+        }
+
+        // Fetch sites for this user
+        const { data: sites, error: dbError } = await supabase
+            .from('sites')
+            .select('*')
+            .eq('user_id', user_id)
+            .order('created_at', { ascending: false });
+
+        if (dbError) {
+            console.error('Database error:', dbError);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to fetch sites'
+            });
+        }
+
+        res.json({
+            success: true,
+            sites: sites || [],
+            total: sites?.length || 0
+        });
+
+    } catch (error) {
+        console.error('Fetch sites error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch sites'
         });
     }
 });
@@ -296,9 +407,26 @@ app.get('/auth/google/callback', async (req, res) => {
 
         const { email, name } = userResponse.data;
 
+        // Create or get user in Supabase
+        const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+            email,
+            email_confirm: true,
+            user_metadata: { name, provider: 'google' }
+        });
+
+        let userId;
+        if (authError && authError.message.includes('already registered')) {
+            // User exists, get their ID
+            const { data: users } = await supabase.auth.admin.listUsers();
+            const existingUser = users.users.find(u => u.email === email);
+            userId = existingUser?.id;
+        } else {
+            userId = authData?.user?.id;
+        }
+
         // Generate session token
         const sessionToken = jwt.sign(
-            { email, name, provider: 'google', timestamp: Date.now() },
+            { email, name, provider: 'google', user_id: userId, timestamp: Date.now() },
             JWT_SECRET,
             { expiresIn: '7d' }
         );
@@ -343,10 +471,29 @@ app.get('/auth/github/callback', async (req, res) => {
         });
 
         const { email, name, login } = userResponse.data;
+        const userEmail = email || `${login}@github.com`;
+        const userName = name || login;
+
+        // Create or get user in Supabase
+        const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+            email: userEmail,
+            email_confirm: true,
+            user_metadata: { name: userName, provider: 'github', github_login: login }
+        });
+
+        let userId;
+        if (authError && authError.message.includes('already registered')) {
+            // User exists, get their ID
+            const { data: users } = await supabase.auth.admin.listUsers();
+            const existingUser = users.users.find(u => u.email === userEmail);
+            userId = existingUser?.id;
+        } else {
+            userId = authData?.user?.id;
+        }
 
         // Generate session token
         const sessionToken = jwt.sign(
-            { email: email || `${login}@github`, name: name || login, provider: 'github', timestamp: Date.now() },
+            { email: userEmail, name: userName, provider: 'github', user_id: userId, timestamp: Date.now() },
             JWT_SECRET,
             { expiresIn: '7d' }
         );
