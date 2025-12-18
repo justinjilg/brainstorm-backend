@@ -276,6 +276,39 @@ app.post('/api/v1/sites/heartbeat', async (req, res) => {
     }
 });
 
+// Get site information by registration_id
+app.get('/api/v1/sites/:registration_id', async (req, res) => {
+    try {
+        const { registration_id } = req.params;
+
+        const { data, error } = await supabase
+            .from('sites')
+            .select('*')
+            .eq('registration_id', registration_id)
+            .single();
+
+        if (error) {
+            console.error('Site fetch error:', error);
+            return res.status(404).json({
+                success: false,
+                message: 'Site not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            site: data
+        });
+
+    } catch (error) {
+        console.error('Site info error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch site information'
+        });
+    }
+});
+
 // Magic link authentication endpoint
 app.post('/api/v1/auth/magic-link', async (req, res) => {
     try {
