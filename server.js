@@ -230,6 +230,52 @@ app.get('/api/v1/sites', async (req, res) => {
     }
 });
 
+// Heartbeat endpoint - Update last_heartbeat for a site
+app.post('/api/v1/sites/heartbeat', async (req, res) => {
+    try {
+        const { registration_id } = req.body;
+
+        if (!registration_id) {
+            return res.status(400).json({
+                success: false,
+                message: 'Registration ID required'
+            });
+        }
+
+        // Update last_heartbeat timestamp
+        const { data, error } = await supabase
+            .from('sites')
+            .update({
+                last_heartbeat: new Date().toISOString(),
+                status: 'active'
+            })
+            .eq('registration_id', registration_id)
+            .select()
+            .single();
+
+        if (error) {
+            console.error('Heartbeat update error:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to update heartbeat'
+            });
+        }
+
+        res.json({
+            success: true,
+            last_heartbeat: data.last_heartbeat,
+            site_name: data.site_name
+        });
+
+    } catch (error) {
+        console.error('Heartbeat error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to process heartbeat'
+        });
+    }
+});
+
 // Magic link authentication endpoint
 app.post('/api/v1/auth/magic-link', async (req, res) => {
     try {
