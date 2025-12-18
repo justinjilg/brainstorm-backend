@@ -309,6 +309,50 @@ app.get('/api/v1/sites/:registration_id', async (req, res) => {
     }
 });
 
+// Ping endpoint for connection testing
+app.post('/api/v1/sites/ping', async (req, res) => {
+    try {
+        const { registration_id } = req.body;
+
+        if (!registration_id) {
+            return res.status(400).json({
+                success: false,
+                message: 'Registration ID required'
+            });
+        }
+
+        // Verify site exists
+        const { data, error } = await supabase
+            .from('sites')
+            .select('id, site_name, status')
+            .eq('registration_id', registration_id)
+            .single();
+
+        if (error) {
+            return res.status(404).json({
+                success: false,
+                message: 'Site not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Pong',
+            site: {
+                name: data.site_name,
+                status: data.status
+            }
+        });
+
+    } catch (error) {
+        console.error('Ping error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to process ping'
+        });
+    }
+});
+
 // Magic link authentication endpoint
 app.post('/api/v1/auth/magic-link', async (req, res) => {
     try {
